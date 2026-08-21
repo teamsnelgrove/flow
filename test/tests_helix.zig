@@ -281,3 +281,77 @@ test "surround_add nudges other cursors by the inserted brackets only" {
     try std.testing.expectEqual(4, enclosed.begin.col);
     try std.testing.expectEqual(9, enclosed.end.col);
 }
+
+const CurSel = @import("tui").exports.editor.CurSel;
+
+//              1111111
+//    01234567890123456
+const long_word_doc: []const u8 =
+    \\foo.bar baz  qux
+    \\a  bb.cc
+;
+
+const Endpoints = struct { begin: struct { usize, usize }, end: struct { usize, usize } };
+
+fn select_long_word(
+    root: Buffer.Root,
+    row: usize,
+    col: usize,
+    select: fn (Buffer.Root, *CurSel, Buffer.Metrics) anyerror!void,
+) !?Endpoints {
+    var cursel: CurSel = .{ .cursor = Cursor{ .row = row, .col = col, .target = 0 } };
+    try select(root, &cursel, metrics());
+    const sel = cursel.selection orelse return null;
+    try std.testing.expectEqual(sel.end.row, cursel.cursor.row);
+    try std.testing.expectEqual(sel.end.col, cursel.cursor.col);
+    return .{
+        .begin = .{ sel.begin.row, sel.begin.col },
+        .end = .{ sel.end.row, sel.end.col },
+    };
+}
+
+fn expect_long_word_selection(
+    root: Buffer.Root,
+    row: usize,
+    col: usize,
+    select: fn (Buffer.Root, *CurSel, Buffer.Metrics) anyerror!void,
+    expected: Endpoints,
+) !void {
+    const got = try select_long_word(root, row, col, select) orelse return error.TestExpectedSelection;
+    try std.testing.expectEqual(expected.begin[0], got.begin[0]);
+    try std.testing.expectEqual(expected.begin[1], got.begin[1]);
+    try std.testing.expectEqual(expected.end[0], got.end[0]);
+    try std.testing.expectEqual(expected.end[1], got.end[1]);
+}
+
+test "long_word_textobjects" {
+    const now = std.Io.Clock.real.now(std.testing.io);
+    const buffer = try Buffer.create(a, now);
+    defer buffer.deinit();
+    buffer.update(try buffer.load_from_string(long_word_doc, &eol_mode, &sanitized), now);
+    const root: Buffer.Root = buffer.root;
+
+    const inner = helix.test_internal.select_inner_long_word;
+    const around = helix.test_internal.select_around_long_word;
+
+    // Cursor on the punctuation inside foo.bar: a long word spans it, and maW
+    // must not bail out the way a word-char gate would.
+    try expect_long_word_selection(root, 0, 3, inner, .{ .begin = .{ 0, 0 }, .end = .{ 0, 7 } });
+    try expect_long_word_selection(root, 0, 3, around, .{ .begin = .{ 0, 0 }, .end = .{ 0, 8 } });
+
+    // Same from a word char: around takes the trailing whitespace, inner does not.
+    try expect_long_word_selection(root, 0, 0, inner, .{ .begin = .{ 0, 0 }, .end = .{ 0, 7 } });
+    try expect_long_word_selection(root, 0, 0, around, .{ .begin = .{ 0, 0 }, .end = .{ 0, 8 } });
+
+    // No trailing whitespace to take, so around falls back to the leading run.
+    try expect_long_word_selection(root, 0, 14, inner, .{ .begin = .{ 0, 13 }, .end = .{ 0, 16 } });
+    try expect_long_word_selection(root, 0, 14, around, .{ .begin = .{ 0, 11 }, .end = .{ 0, 16 } });
+
+    // A long word is not split on punctuation.
+    try expect_long_word_selection(root, 1, 4, inner, .{ .begin = .{ 1, 3 }, .end = .{ 1, 8 } });
+    try expect_long_word_selection(root, 1, 4, around, .{ .begin = .{ 1, 1 }, .end = .{ 1, 8 } });
+
+    // On whitespace both are no-ops.
+    try std.testing.expectEqual(null, try select_long_word(root, 0, 7, inner));
+    try std.testing.expectEqual(null, try select_long_word(root, 0, 7, around));
+}

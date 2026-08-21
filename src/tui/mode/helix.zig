@@ -1349,4 +1349,6 @@ pub const test_internal = struct {
     pub const insert_replace_selection = private.insert_replace_selection;
     pub const insert_after = private.insert_after;
     pub const surround_add = private.surround_add;
+    pub const select_inner_long_word = private.select_inner_long_word;
+    pub const select_around_long_word = private.select_around_long_word;
 };
