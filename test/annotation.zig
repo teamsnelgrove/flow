@@ -126,6 +126,33 @@ pub fn splitCase(src: []const u8) error{ MissingSeparator, MultipleSeparators }!
     return .{ .input = src[0..idx], .expected = src[idx + sep.len ..] };
 }
 
+/// Whether flow is expected to produce a case's result today.
+///
+/// A `.known_gap` case describes correct helix behavior that flow does not
+/// have yet. It passes while flow gets it wrong and fails once flow gets it
+/// right, so closing a gap means flipping the case to `.passes`.
+pub const Status = enum { passes, known_gap };
+
+/// Assert the rendered result of a case against its expected half. `actual`
+/// is owned by the caller's allocator and freed here. Under `.known_gap` any
+/// error or mismatch is the expected outcome and is swallowed quietly.
+pub fn expectCase(alloc: Allocator, status: Status, expected: []const u8, actual: anyerror![]u8) !void {
+    defer if (actual) |got| alloc.free(got) else |_| {};
+
+    // A gap whose expected half is malformed could never be closed.
+    var exp = try parse(alloc, expected);
+    exp.deinit();
+
+    const got = actual catch |e| return switch (status) {
+        .passes => e,
+        .known_gap => {},
+    };
+    switch (status) {
+        .passes => try std.testing.expectEqualStrings(expected, got),
+        .known_gap => if (std.mem.eql(u8, expected, got)) return error.KnownGapNowPasses,
+    }
+}
+
 /// Both positions must lie within `text`; one past the final character is
 /// the highest valid position.
 pub fn render(alloc: Allocator, text: []const u8, anchor: Pos, head: Pos) Allocator.Error![]u8 {
@@ -188,6 +215,19 @@ test "splitCase" {
     try std.testing.expectEqualStrings("#[abc|]#", case.expected);
     try std.testing.expectError(error.MissingSeparator, splitCase("a\n\nb"));
     try std.testing.expectError(error.MultipleSeparators, splitCase("a\n=>\nb\n=>\nc"));
+}
+
+test "expectCase" {
+    const want = "#[foo|]# bar";
+    const other = "foo #[bar|]#";
+
+    try expectCase(a, .passes, want, try a.dupe(u8, want));
+    try std.testing.expectError(error.Stop, expectCase(a, .passes, want, error.Stop));
+
+    try expectCase(a, .known_gap, want, try a.dupe(u8, other));
+    try expectCase(a, .known_gap, want, error.Stop);
+    try std.testing.expectError(error.KnownGapNowPasses, expectCase(a, .known_gap, want, try a.dupe(u8, want)));
+    try std.testing.expectError(error.MissingSelection, expectCase(a, .known_gap, "foo bar", try a.dupe(u8, other)));
 }
 
 test "annotation rejects malformed fixtures" {

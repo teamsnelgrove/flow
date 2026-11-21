@@ -357,20 +357,15 @@ test "long_word_textobjects" {
     try std.testing.expectEqual(null, try select_long_word(root, 0, 7, around));
 }
 
-// A case is one annotated document (annotation.zig): the input, a line that
-// is exactly `=>`, then the same document with the expected selection. The
-// input's selection marks where the cursor sits.
-fn expect_scope_textobject(
+// Run a pair textobject from the cursor an annotated document marks and
+// render the resulting selection back into the document.
+fn scope_textobject(
     open: []const u8,
     close: []const u8,
     scope: helix.test_internal.TextobjectScope,
-    case_src: []const u8,
-) !void {
+    ann: *const annotation.Annotated,
+) ![]u8 {
     const now = std.Io.Clock.real.now(std.testing.io);
-    const case = try annotation.splitCase(case_src);
-    var ann = try annotation.parse(a, case.input);
-    defer ann.deinit();
-
     const buffer = try Buffer.create(a, now);
     defer buffer.deinit();
     buffer.update(try buffer.load_from_string(ann.text, &eol_mode, &sanitized), now);
@@ -380,17 +375,41 @@ fn expect_scope_textobject(
     var cursel: CurSel = .{ .cursor = Cursor{ .row = cur.row, .col = cur.col, .target = 0 } };
     try helix.test_internal.select_scope_textobject(root, &cursel, metrics(), open, close, scope);
     const sel = cursel.selection orelse return error.TestExpectedSelection;
-    try std.testing.expectEqual(sel.end.row, cursel.cursor.row);
-    try std.testing.expectEqual(sel.end.col, cursel.cursor.col);
+    if (sel.end.row != cursel.cursor.row or sel.end.col != cursel.cursor.col)
+        return error.TestExpectedCursorAtSelectionEnd;
 
-    const rendered = try annotation.render(
+    return annotation.render(
         a,
         ann.text,
         .{ .row = sel.begin.row, .col = sel.begin.col },
         .{ .row = sel.end.row, .col = sel.end.col },
     );
-    defer a.free(rendered);
-    try std.testing.expectEqualStrings(case.expected, rendered);
+}
+
+// A case is one annotated document (annotation.zig): the input, a line that
+// is exactly `=>`, then the same document with the expected selection. The
+// input's selection marks where the cursor sits. Record a known gap by
+// calling this with `.known_gap`.
+fn check_scope_textobject(
+    status: annotation.Status,
+    open: []const u8,
+    close: []const u8,
+    scope: helix.test_internal.TextobjectScope,
+    case_src: []const u8,
+) !void {
+    const case = try annotation.splitCase(case_src);
+    var ann = try annotation.parse(a, case.input);
+    defer ann.deinit();
+    try annotation.expectCase(a, status, case.expected, scope_textobject(open, close, scope, &ann));
+}
+
+fn expect_scope_textobject(
+    open: []const u8,
+    close: []const u8,
+    scope: helix.test_internal.TextobjectScope,
+    case_src: []const u8,
+) !void {
+    return check_scope_textobject(.passes, open, close, scope, case_src);
 }
 
 test "scope_textobjects" {
