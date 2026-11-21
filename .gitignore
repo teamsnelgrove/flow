@@ -2,3 +2,8 @@
 /zig-out/
 /zig-pkg/
 /.zig-cache/
+/.devenv*
+/devenv.local.nix
+/devenv.local.yaml
+/.direnv/
+/result
